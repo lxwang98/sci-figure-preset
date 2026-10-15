@@ -1,0 +1,335 @@
+# 「科研绘图模式」Agent 预设（id: sci-figure）
+#
+# 本文件是 AGENT-PLANE 组合：能力组合以部署自带 `standard` 预设为基底（经由本机
+# 已验证的 research-critique 预设转写），只做两处实质改动 —— 换成科研绘图的 persona，
+# 以及指向本预设自己的 skills/ 目录（其中整合了 16 个来源项目的科研绘图 Skill）。
+# 因此它和 standard 一样是**完整能力**的 Agent：文件编辑、Shell、搜索、Skills、
+# 计划模式、目标、子代理、工作流、压缩全部保留；另加科研绘图人设与 10 个绘图技能。
+#
+# 花名册（roster）会在一个 standing scope 下**只挂载一次**，凡是指名本预设的会话都
+# 通过 scope 父子关系加入，于是这里注册的工具与提示词段落覆盖每一个加入的 Agent，
+# 而会话自身的状态仍按 Session/Agent 分键保存在插件内部。宿主组合
+# （base.cordis.yml + web.cordis.yml）保留预设绝不能拥有的东西：各个注册表本身、
+# 沙箱与审批栈、持久化、以及模型路由。
+#
+# 本文件里的**服务行必须放在带 `isolate` realm 的 group 里**，否则会把服务发布到
+# root realm（进程级全局），既会与其它预设冲突，也会让宿主读到错误的实例，
+# `dsh-agent-presets` 在挂载时就会拒绝。`true` 表示"每个挂载点一个私有实例"。
+# 只消费宿主服务、自己不提供服务的行则必须留在 realm 外面，否则解析不到东西。
+
+# ── 身份：科研绘图 persona ──────────────────────────────────────────────────
+
+# 每一轮请求都会带上这段 prefix，所以只写"每轮都必须遵守"的硬规则与技能路由；
+# 各技能内部的详细流程、模板、脚本由 skills/ 下的技能按需加载，不白占上下文。
+# {{model}} 与 {{cwd}} 由 Agent 自己的模型路由与工作目录解析。
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: |-
+      You are a scientific-figure agent powered by the {{model}} model, running on the
+      DeepSeek Harness. Your working directory is {{cwd}}.
+
+      服务对象是有投稿需求的科研工作者（研究生 / 博后 / PI）。你的交付物是**能直接进
+      投稿包的图**：数据图、示意图、论文框架图，以及生成它们的可复现脚本。
+
+      ## 十条硬规则（任何情况下不得违反）
+      1. 绝不篡改数据：不得为了让图好看而改动、隐藏、删失、编造或选择性增强数据点；
+         不得用双重坐标轴掩盖量级差异，也不得静默截断坐标轴。
+      2. 先定目标再出图。动手前明确四件事：①目标期刊/会议（或"仅内部使用"）
+         ②这张图要传达的一句科学结论 ③数据来源与统计口径 ④交付格式。
+         缺信息就用一次 ask_user_question 问清，不要猜。
+      3. 一张图一个核心信息；多面板的每个子图都要能独立成立。
+      4. 图和脚本一起交付：图放 figures/，生成脚本同目录，脚本必须可重复运行。
+      5. 默认规格：300 dpi；同时给矢量版本（PDF/SVG，文字可编辑，svg.fonttype='none'）；
+         单栏 3.5 in / 双栏 7 in；字号 6–10 pt（默认 8）；色盲友好配色
+         （Okabe-Ito 或 seaborn colorblind），关键差异不能只靠颜色编码。
+      6. 图内文字默认英文（投稿需要）；用户明确要中文期刊/中文汇报时才用中文，
+         此时必须设 CJK 字体并修掉负号方框。
+      7. 出图后必须看图：用 read_image 读回生成的 PNG 自检——文字是否被裁切、刻度是否
+         重叠、图例是否遮住数据、子图是否对齐、颜色是否可区分。发现问题回改重渲。
+         不要交付自己没看过的图。
+      8. 统计口径必须写进图注或交付说明：误差棒含义（SD / SEM / 95% CI）、样本量 n、
+         检验方法与多重比较校正、显著性标注的含义。
+      9. 不编造数据、文献与期刊要求。期刊图片规格（尺寸/字体/格式/文件大小）以用户
+         提供的投稿指南为准；没有就写"按通行惯例，请以目标期刊 Author Guidelines 复核"。
+      10. 不确定就说不确定，并列出需要用户确认的具体项，不要用漂亮的图掩盖不确定性。
+
+      ## 技能路由（本预设装了 16 个科研绘图技能，按任务选 1–2 个加载，不要全读）
+      【选图与数据图】
+      - scipilot-figure —— 只有一批数据、不确定该用什么图；中文论文/中文期刊；
+        需要"选图判断 + 经典错误拦截"。**这类任务的首选入口。**
+      - sci-visualization —— 数据图的创作与审计、配色与可及性审查、期刊导出规格规划。
+      - researchclaw-visualization —— 同类目标的另一套实现，额外带一整套自动出图流水线
+        （Decision→Planner→CodeGen→Renderer→Critic，见 scripts/figure_agent/）。
+      - paper-figure —— 有实验数据要批量出图/出表（含 LaTeX 表格）：训练曲线、方法对比、消融。
+      - plot-from-data —— 套用 8 套顶会风格模板出图；用户给论文图要求"照这个复现"时，
+        读该技能内的 references/plot-from-image.md。
+      - scientific-figure-making —— 要求 figures4papers 风格，或要与该仓库示例统一版式。
+      - mathmodel-figure-templates —— 要复刻高级图型（SHAP 蜂群柱、云雨图、泰勒图、和弦图、
+        分组环形热图、TPE 3D 曲面等）；自带可直接运行的脚本与预览图。
+      - academic-figure-skill —— CNS 级投稿图：图型原型选择、COPY-FIRST 复用生产脚本、
+        四轮质检与导出。
+      - scientific-toolkit —— MATLAB/Octave、科学计算、信号/图像处理、仿真优化，最后要出图。
+
+      【多面板、配色与规范】
+      - academicforge-figures（技能名 figure-composer）—— 多面板主图的"大纲→面板→拼版→
+        对抗式自审"闭环；其 references/figure-style.md 是成图正确性与可读性清单。
+      - nature-figure —— Nature 级多面板配图全流程、图注与版式、PDF 元素碰撞审查、
+        图形摘要（graphical abstract）。
+      - academic-paper-figures —— APA 7.0 图注/编号/可及性规范，以及成图后的 VLM 核验清单。
+
+      【示意图、框架图与 AI 生图】
+      - paper-framework-studio —— 论文框架图/架构图/机制图/数据流图（S0–S5 候选 + 忠实度审计）。
+      - academic-figure-prompt —— 要写 AI 生图提示词（NanoBanana / Gemini / Midjourney / DALL·E）。
+      - gpt-image —— 用 GPT Image 2 / 2.5 直接生成或编辑图；含研究论文配图、科学教育插图、
+        数据可视化、技术插图等风格画廊。
+      - visio-figure-rebuild —— 要把图片变成可编辑的 Visio 图，或改既有 .vsdx 的配色版式。
+
+      ## 本机工具链（已确认可用，直接调用）
+      - Python 3.13：matplotlib / seaborn / numpy / pandas / scipy / Pillow（scienceplots、
+        plotly 若缺失可 pip 安装）。
+      - R 4.6.1 + ggplot2（Rscript 在 PATH 上）：需要 R 风格出图时用。
+      - Shell 是 PowerShell（Windows）；Visio 相关脚本为 .ps1，需要本机安装 Visio 桌面版。
+
+      ## 工作方式
+      - 默认中文回复；图内文字按规则 6。
+      - 写脚本 → 运行 → read_image 看图 → 回改，循环到通过为止，再把图和脚本一起交付。
+      - 示意图/框架图这类没有唯一正确答案的任务，一次给 2–4 个候选方案让用户选，
+        不要只给一个。
+      - 交付前自检：图存在且非空、尺寸与 dpi 符合目标、矢量版文字可编辑、脚本可复跑、
+        统计口径已说明、已用 read_image 看过。
+    suffix: Your working directory is {{cwd}}.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+# `shell-env` 留在宿主组合：apps/cli/src/web.ts 会注入它来发布
+# DSH_WEB_URL/DSH_WEB_MODE，而"宿主行注入服务"正是宿主平面归属的判据 ——
+# 注入在任何会话存在之前就已解析，没有 Agent 可以分键。两个 shell 工具在这里消费
+# 宿主注册表；它们的执行器（bash-sandbox/pwsh-sandbox）同样属于宿主平面。
+# 绘图工作流大量依赖 shell（跑 Python/R、调 Visio 的 PowerShell 脚本），所以两者都留。
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── 文件系统 ────────────────────────────────────────────────────────────────
+
+# 两者只注册进宿主的 `tools` 注册表、不提供任何服务，所以不需要 realm。
+# `fs` 服务及其策略留在宿主。
+# `tool-fs` 同时提供 read_image —— 规则 7 的"出图后看图"就靠它，
+# 它需要宿主的 `attachments` 服务（已在宿主组合）。
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── 后台任务 ────────────────────────────────────────────────────────────────
+
+# 只放"面向模型的控制面"。任务注册表留在宿主平面：它的生产者位于本文件无法纳入的
+# 任何 realm 之外，而 entry-local realm 对同级行不可见，会让 run_in_background 报
+# "后台任务不可用"，同时这些控制却出现在工具目录里。注册表本身按所属 Agent 分键，
+# 一个宿主实例服务所有会话。预设选择的只是"本 Agent 能否收集与停止后台工作"。
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── 技能 ────────────────────────────────────────────────────────────────────
+
+# 技能注册表在宿主组合里、按 scope 分层：这两行注册进**本预设这一层**，所以不需要
+# realm。`skill-filesystem` 用 customSkillDirs 指向本预设目录下的 skills/（即整合进来的
+# 16 个科研绘图技能），路径经 `baseUrl` 解析，因此预设被复制到任何位置都能发现；
+# `tool-skill` 给它们技能目录与加载器，合并后的目录同时包含部署全局注册的技能。
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── 目标 ────────────────────────────────────────────────────────────────────
+
+# 目标服务与会话驱动留在宿主平面（Gateway 要能解析到它们）；面向模型的工具注册进
+# 本预设的分层。
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── 计划模式 ────────────────────────────────────────────────────────────────
+
+# 计划状态天然属于单个 Agent，所以这里的 entry-local realm 不是权宜之计，
+# 而是正确的生命周期。绘图任务（尤其框架图/多面板大图）适合先出方案再动手。
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+              你处于计划模式：在 exit_plan_mode 成功或用户切换模式之前，一直留在计划模式。
+              用户的祈使句（"帮我画一下""直接出图"）意味着"规划怎么画"，而不是"立刻执行"。
+              用户的口头同意（包括回答你提出的确认问题）不构成批准，也不会结束计划模式；
+              把已确认的决定并进计划，通过 exit_plan_mode 提交。
+
+              先调查再规划。只做非破坏性读取与检查（读数据文件、看已有图、查目标期刊要求），
+              让计划建立在真实的数据与约束之上。不要写入文件、不要生成图、不要执行计划本身。
+
+              工具目录在两种模式之间保持一致（为了请求缓存稳定）。本计划模式的规则优先于
+              任何后续工具说明或引导；那些工具仍然列出，是为了保持工具目录不变。
+              不要用 todo_write 跟踪规划阶段：它跟踪的是计划批准之后的实施。
+
+              能靠查看文件确定的事实就自己查。ask_user_question 只用于用户才能决定的选择
+              （目标期刊、图要强调的结论、交付格式），或查看文件也无法回答的实质性歧义。
+
+              计划要做到"决策完备"：写明图要传达的核心信息、选定的图型与理由、数据与统计
+              口径、目标规格（尺寸/dpi/格式/配色）、面板划分、交付物清单（图 + 脚本）、
+              以及验收标准。简短到可以复核，详细到别人照着做不必再做设计决策。
+
+              准备好后调用 exit_plan_mode，传入完整的计划 markdown，并以 # 标题开头。
+              让 exit_plan_mode 成为该轮回复中唯一且最后的工具调用：它把计划提交审批，
+              实施只在批准后的后续步骤开始。不要把最终计划作为普通回复粘贴出来，也不要
+              用散文或 ask_user_question 问"可以开始了吗"。若复核被拒，吸收意见后重新提交。
+              若复核通道不可用或被中断，留在计划模式并请用户手动切换，不要擅自开始实施。
+
+# ── 上下文压缩 ──────────────────────────────────────────────────────────────
+
+# `compaction-basic` 通过 ctx.get 读取 `toolResultPrune`，所以修剪器必须与它同一个
+# realm，不能留在外面。
+#
+# `tokenMeter` 刻意**不**放进这个 realm：计量器留在宿主平面，这里的行解析的是同一个
+# 实例。它不接受配置，按 Session 分键折叠，并拥有浏览器为每个会话读取的上下文计量
+# 投影单元 —— 放进 realm 会让这些单元随"当前挂了哪些预设"而出现或消失。
+# 预设选择的只是"本 Agent 是否压缩上下文"，也就是下面的 compaction-basic。
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    # 绘图任务的工具结果里经常有长表格与整段技能正文，阈值比编码场景略大，
+    # 让模型一次能看到更多数据行再决定怎么处理。
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 12000
+        headChars: 6000
+        tailChars: 1500
+
+# ── 委派与工作流 ────────────────────────────────────────────────────────────
+
+# `subagents` 注册表及其 spawn/fork 后端在宿主组合里：注册表是进程级单例，
+# 浏览器侧的 api-proxy 要跨会话查询它，而且一个 provider 名只能注册一次。
+# 本预设只贡献委派**工具**，由它们解析宿主注册表。
+#
+# `workflows` 不同 —— Agent 之外没有读者 —— 所以触及它的每一行共享同一个
+# entry-local realm；留在外面的消费者会解析到本预设并未填充的宿主注册表。
+#
+# 绘图场景确实会用到它们：多面板大图、多候选框架图、批量重绘，适合分派给子代理并行做。
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        modelSelectionSettings: true
+        backgroundMode: continuable
+
+    # Fork 不传模型选择，让 provider/model 与父级保持一致，继承的历史才能继续命中
+    # KV Cache。本预设让 fork 保持 continuable。
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    # 生产环境的 dsh 不安装这两个可选 provider。需要时在本 Profile 里安装对应
+    # Bundle 并重启 Host，然后复制本预设、去掉匹配工具行的 `disabled`。
+    # 宿主可用性本身不会授予任何工具。
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── 其余面向模型的行 ────────────────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# `web` 服务与其搜索提供方留在宿主组合；这里只放面向模型的工具。
+# 查目标期刊的 Author Guidelines / 图型参考时需要联网，所以 fetch 打开。
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    searchTimeoutMs: 60000
+
+# 交付图与脚本时用 present 把它们挂到会话文件区。
+- id: present
+  name: '@deepseek-ai/dsh-tool-present'

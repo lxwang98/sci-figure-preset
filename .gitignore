@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 出图产物与临时文件（技能运行时生成，不入库）
+figures/
+outputs/
+绘图复刻/
+.mplconfig/
+*.mplconfig/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本机下载缓存
+.cache/
+src/
